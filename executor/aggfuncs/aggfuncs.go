@@ -39,6 +39,10 @@ var (
 	_ AggFunc = (*countOriginalWithDistinct4String)(nil)
 	_ AggFunc = (*countOriginalWithDistinct)(nil)
 
+	// All the AggFunc implementations for "APPROX_UNIQ" are listed here.
+	_ AggFunc = (*approxUniqOriginal)(nil)
+	_ AggFunc = (*approxUniqPartial)(nil)
+
 	// All the AggFunc implementations for "FIRSTROW" are listed here.
 	_ AggFunc = (*firstRow4Decimal)(nil)
 	_ AggFunc = (*firstRow4Int)(nil)

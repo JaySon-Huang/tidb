@@ -198,6 +198,9 @@ func CheckAggPushDown(aggFunc *AggFuncDesc, storeType kv.StoreType) bool {
 	switch storeType {
 	case kv.TiFlash:
 		ret = CheckAggPushFlash(aggFunc)
+	default:
+		// Can not push down approx_uniq to other store except tiflash by now.
+		ret = aggFunc.Name != ast.AggFuncApproxUniq
 	}
 	if ret {
 		ret = expression.IsPushDownEnabled(strings.ToLower(aggFunc.Name), storeType)
@@ -208,7 +211,7 @@ func CheckAggPushDown(aggFunc *AggFuncDesc, storeType kv.StoreType) bool {
 // CheckAggPushFlash checks whether an agg function can be pushed to flash storage.
 func CheckAggPushFlash(aggFunc *AggFuncDesc) bool {
 	switch aggFunc.Name {
-	case ast.AggFuncSum, ast.AggFuncCount, ast.AggFuncMin, ast.AggFuncMax, ast.AggFuncAvg, ast.AggFuncFirstRow:
+	case ast.AggFuncSum, ast.AggFuncCount, ast.AggFuncMin, ast.AggFuncMax, ast.AggFuncAvg, ast.AggFuncFirstRow, ast.AggFuncApproxUniq:
 		return true
 	}
 	return false

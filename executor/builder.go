@@ -1202,6 +1202,10 @@ func (b *executorBuilder) buildHashAgg(v *plannercore.PhysicalHashAgg) Executor 
 		if aggDesc.HasDistinct || len(aggDesc.OrderByItems) > 0 {
 			e.isUnparallelExec = true
 		}
+		// special case for AggFuncApproxUniq, Partial1Mode is not supported yet.
+		if aggDesc.Mode == aggregation.CompleteMode && aggDesc.Name == ast.AggFuncApproxUniq {
+			e.isUnparallelExec = true
+		}
 	}
 	// When we set both tidb_hashagg_final_concurrency and tidb_hashagg_partial_concurrency to 1,
 	// we do not need to parallelly execute hash agg,

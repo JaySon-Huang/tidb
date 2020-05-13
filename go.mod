@@ -1,5 +1,9 @@
 module github.com/pingcap/tidb
 
+replace github.com/pingcap/parser v0.0.0-20200507022230-f3bf29096657 => github.com/solotzg/parser v0.0.0-20200513084303-ee7cd9a50212
+
+replace github.com/pingcap/tipb v0.0.0-20200417094153-7316d94df1ee => github.com/solotzg/tipb v0.0.0-20200513035501-2d4591b9cd9a
+
 require (
 	github.com/BurntSushi/toml v0.3.1
 	github.com/blacktear23/go-proxyprotocol v0.0.0-20180807104634-af7a81e8dd0d
@@ -8,7 +12,7 @@ require (
 	github.com/danjacques/gofslock v0.0.0-20191023191349-0a45f885bc37
 	github.com/dgraph-io/ristretto v0.0.1
 	github.com/dgryski/go-farm v0.0.0-20190423205320-6a90982ecee2
-	github.com/go-sql-driver/mysql v1.4.1
+	github.com/go-sql-driver/mysql v1.5.0
 	github.com/gogo/protobuf v1.3.1
 	github.com/golang/protobuf v1.3.4
 	github.com/golang/snappy v0.0.1

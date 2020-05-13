@@ -55,6 +55,8 @@ func Build(ctx sessionctx.Context, aggFuncDesc *aggregation.AggFuncDesc, ordinal
 		return buildVarPop(aggFuncDesc, ordinal)
 	case ast.AggFuncJsonObjectAgg:
 		return buildJSONObjectAgg(aggFuncDesc, ordinal)
+	case ast.AggFuncApproxUniq:
+		return buildApproxUniq(aggFuncDesc, ordinal)
 	}
 	return nil
 }
@@ -87,6 +89,23 @@ func BuildWindowFunctions(ctx sessionctx.Context, windowFuncDesc *aggregation.Ag
 	default:
 		return Build(ctx, windowFuncDesc, ordinal)
 	}
+}
+
+func buildApproxUniq(aggFuncDesc *aggregation.AggFuncDesc, ordinal int) AggFunc {
+	base := baseAggFunc{
+		args:    aggFuncDesc.Args,
+		ordinal: ordinal,
+	}
+
+	// Do not support Partial1Mode by now.
+	// Agg function `approx_uniq` need to compute hash value of origin data, but the way is not equal in tidb and tiflash.
+	switch aggFuncDesc.Mode {
+	case aggregation.CompleteMode:
+		return &approxUniqOriginal{baseApproxUniq{base}}
+	case aggregation.Partial2Mode, aggregation.FinalMode:
+		return &approxUniqPartial{baseApproxUniq{base}}
+	}
+	return nil
 }
 
 // buildCount builds the AggFunc implementation for function "COUNT".

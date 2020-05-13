@@ -53,6 +53,35 @@ func (s *testSuite) TestCount(c *C) {
 	for _, test := range tests2 {
 		s.testMultiArgsAggFunc(c, test)
 	}
+
+	tests3 := []aggTest{
+		buildAggTester(ast.AggFuncCount, mysql.TypeLonglong, 5, 0, 5),
+		buildAggTester(ast.AggFuncCount, mysql.TypeFloat, 5, 0, 5),
+		buildAggTester(ast.AggFuncCount, mysql.TypeDouble, 5, 0, 5),
+		buildAggTester(ast.AggFuncCount, mysql.TypeNewDecimal, 5, 0, 5),
+		buildAggTester(ast.AggFuncCount, mysql.TypeString, 5, 0, 5),
+		buildAggTester(ast.AggFuncCount, mysql.TypeDate, 5, 0, 5),
+		buildAggTester(ast.AggFuncCount, mysql.TypeDuration, 5, 0, 5),
+		buildAggTester(ast.AggFuncCount, mysql.TypeJSON, 5, 0, 5),
+	}
+	for _, test := range tests3 {
+		s.testAggFunc(c, test)
+	}
+
+	tests4 := []multiArgsAggTest{
+		buildMultiArgsAggTester(ast.AggFuncApproxUniq, []byte{mysql.TypeLonglong, mysql.TypeLonglong}, mysql.TypeLonglong, 5, 0, 5),
+		buildMultiArgsAggTester(ast.AggFuncApproxUniq, []byte{mysql.TypeFloat, mysql.TypeFloat}, mysql.TypeLonglong, 5, 0, 5),
+		buildMultiArgsAggTester(ast.AggFuncApproxUniq, []byte{mysql.TypeDouble, mysql.TypeDouble}, mysql.TypeLonglong, 5, 0, 5),
+		buildMultiArgsAggTester(ast.AggFuncApproxUniq, []byte{mysql.TypeNewDecimal, mysql.TypeNewDecimal}, mysql.TypeLonglong, 5, 0, 5),
+		buildMultiArgsAggTester(ast.AggFuncApproxUniq, []byte{mysql.TypeString, mysql.TypeString}, mysql.TypeLonglong, 5, 0, 5),
+		buildMultiArgsAggTester(ast.AggFuncApproxUniq, []byte{mysql.TypeDate, mysql.TypeDate}, mysql.TypeLonglong, 5, 0, 5),
+		buildMultiArgsAggTester(ast.AggFuncApproxUniq, []byte{mysql.TypeDuration, mysql.TypeDuration}, mysql.TypeLonglong, 5, 0, 5),
+		buildMultiArgsAggTester(ast.AggFuncApproxUniq, []byte{mysql.TypeJSON, mysql.TypeJSON}, mysql.TypeLonglong, 5, 0, 5),
+	}
+
+	for _, test := range tests4 {
+		s.testMultiArgsAggFunc(c, test)
+	}
 }
 
 func BenchmarkCount(b *testing.B) {

@@ -15,8 +15,10 @@ package aggfuncs
 
 import (
 	"encoding/binary"
+	"math"
 	"unsafe"
 
+	"github.com/dgryski/go-farm"
 	"github.com/pingcap/errors"
 	"github.com/pingcap/tidb/expression"
 	"github.com/pingcap/tidb/sessionctx"
@@ -297,7 +299,7 @@ func (e *countOriginalWithDistinct) UpdatePartialResult(sctx sessionctx.Context,
 		encodedBytes = encodedBytes[:0]
 
 		for i := 0; i < len(e.args) && !hasNull; i++ {
-			encodedBytes, isNull, err = e.evalAndEncode(sctx, e.args[i], row, buf, encodedBytes)
+			encodedBytes, isNull, err = evalAndEncode(sctx, e.args[i], row, buf, encodedBytes)
 			if err != nil {
 				return
 			}
@@ -317,7 +319,7 @@ func (e *countOriginalWithDistinct) UpdatePartialResult(sctx sessionctx.Context,
 }
 
 // evalAndEncode eval one row with an expression and encode value to bytes.
-func (e *countOriginalWithDistinct) evalAndEncode(
+func evalAndEncode(
 	sctx sessionctx.Context, arg expression.Expression,
 	row chunk.Row, buf, encodedBytes []byte,
 ) (_ []byte, isNull bool, err error) {
@@ -427,4 +429,361 @@ func appendJSON(encodedBytes, _ []byte, val json.BinaryJSON) []byte {
 	encodedBytes = append(encodedBytes, val.TypeCode)
 	encodedBytes = append(encodedBytes, val.Value...)
 	return encodedBytes
+}
+
+func intHash64(x uint64) uint64 {
+	x ^= x >> 33
+	x *= 0xff51afd7ed558ccd
+	x ^= x >> 33
+	x *= 0xc4ceb9fe1a85ec53
+	x ^= x >> 33
+	return x
+}
+
+type baseApproxUniq struct {
+	baseAggFunc
+}
+
+const (
+	// The maximum degree of buffer size before the values are discarded
+	uniquesHashMaxSizeDegree = 17
+	// The maximum number of elements before the values are discarded
+	uniquesHashMaxSize = uint32(1) << (uniquesHashMaxSizeDegree - 1)
+	// Initial buffer size degree
+	uniquesHashSetInitialSizeDegree uint8 = 4
+	// The number of least significant bits used for thinning. The remaining high-order bits are used to determine the position in the hash table.
+	uniquesHashBitsForSkip = 32 - uniquesHashMaxSizeDegree
+)
+
+type approxUniqHashValue uint32
+
+// Based on BJKST algorithm.
+// According to an experimental survey http://www.vldb.org/pvldb/vol11/p499-harmouch.pdf, the error guarantee of BJKST
+// was even better than the theoretical lower bounds (i.e., relative error was always far less than 1%).
+type partialResult4ApproxUniq struct {
+	size       uint32 /// Number of elements.
+	sizeDegree uint8  /// The size of the table as a power of 2.
+	skipDegree uint8  /// Skip elements not divisible by 2 ^ skip_degree.
+	hasZero    bool   /// The hash table contains an element with a hash value of 0.
+	buf        []approxUniqHashValue
+}
+
+func newPartialResult4ApproxUniq() *partialResult4ApproxUniq {
+	p := &partialResult4ApproxUniq{}
+	p.reset()
+	return p
+}
+
+func (p *partialResult4ApproxUniq) insert(x uint64) {
+	hashValue := approxUniqHashValue(intHash64(x))
+	if !p.good(hashValue) {
+		return
+	}
+	p.insertImpl(hashValue)
+	p.shrinkIfNeed()
+}
+
+func (p *partialResult4ApproxUniq) alloc(newSizeDegree uint8) {
+	p.size = 0
+	p.skipDegree = 0
+	p.hasZero = false
+	p.buf = make([]approxUniqHashValue, uint64(1)<<newSizeDegree)
+	p.sizeDegree = newSizeDegree
+}
+
+func (p *partialResult4ApproxUniq) reset() {
+	p.alloc(uniquesHashSetInitialSizeDegree)
+}
+
+func max(a, b uint32) uint32 {
+	if a > b {
+		return a
+	}
+
+	return b
+}
+
+func (p *partialResult4ApproxUniq) bufSize() uint32 {
+	return uint32(1) << p.sizeDegree
+}
+
+func (p *partialResult4ApproxUniq) mask() uint32 {
+	return p.bufSize() - 1
+}
+
+func (p *partialResult4ApproxUniq) place(x approxUniqHashValue) uint32 {
+	return uint32(x>>uniquesHashBitsForSkip) & p.mask()
+}
+
+// Increase the size of the buffer 2 times or up to new_size_degree, if it is non-zero.
+func (p *partialResult4ApproxUniq) resize(newSizeDegree uint32) {
+	oldSize := p.bufSize()
+	oldBuf := p.buf
+
+	if 0 == newSizeDegree {
+		newSizeDegree = uint32(p.sizeDegree + 1)
+	}
+
+	p.buf = make([]approxUniqHashValue, uint64(1)<<newSizeDegree)
+	copy(p.buf, oldBuf[:oldSize])
+	p.sizeDegree = uint8(newSizeDegree)
+
+	for i := uint32(0); i < oldSize || p.buf[i] != 0; i++ {
+		x := p.buf[i]
+		if x == 0 {
+			continue
+		}
+
+		placeValue := p.place(x)
+
+		if placeValue == i {
+			continue
+		}
+
+		for p.buf[placeValue] != 0 && p.buf[placeValue] != x {
+			placeValue++
+			placeValue &= p.mask()
+		}
+
+		if p.buf[placeValue] == x {
+			continue
+		}
+
+		p.buf[placeValue] = x
+		p.buf[i] = 0
+	}
+}
+
+func (p *partialResult4ApproxUniq) readAndMerge(rb []byte) error {
+	rhsSkipDegree := rb[0]
+	rb = rb[1:]
+
+	if rhsSkipDegree > p.skipDegree {
+		p.skipDegree = rhsSkipDegree
+		p.rehash()
+	}
+
+	rb, rhsSize, err := codec.DecodeUvarint(rb)
+
+	if err != nil {
+		return err
+	}
+
+	if rhsSize > uint64(uniquesHashMaxSize) {
+		return errors.New("Cannot read partialResult4ApproxUniq: too large size_degree")
+	}
+
+	if (uint64(1) << p.sizeDegree) < rhsSize {
+		newSizeDegree := max(uint32(uniquesHashSetInitialSizeDegree), uint32(math.Log2(float64(rhsSize-1)))+2)
+		p.resize(newSizeDegree)
+	}
+
+	for i := uint64(0); i < rhsSize; i++ {
+		x := *(*approxUniqHashValue)(unsafe.Pointer(&rb[0]))
+		rb = rb[4:]
+		p.insertHash(x)
+	}
+
+	return err
+}
+
+func (p *partialResult4ApproxUniq) fixedSize() uint64 {
+	if 0 == p.skipDegree {
+		return uint64(p.size)
+	}
+
+	res := uint64(p.size) * (uint64(1) << p.skipDegree)
+
+	res += intHash64(uint64(p.size)) & ((uint64(1) << p.skipDegree) - 1)
+
+	p32 := uint64(1) << 32
+	fixedRes := math.Round(float64(p32) * (math.Log(float64(p32)) - math.Log(float64(p32-res))))
+	return uint64(fixedRes)
+}
+
+func (p *partialResult4ApproxUniq) insertHash(hashValue approxUniqHashValue) {
+	if !p.good(hashValue) {
+		return
+	}
+
+	p.insertImpl(hashValue)
+	p.shrinkIfNeed()
+}
+
+// The value is divided by 2 ^ skip_degree
+func (p *partialResult4ApproxUniq) good(hash approxUniqHashValue) bool {
+	return hash == ((hash >> p.skipDegree) << p.skipDegree)
+}
+
+// Insert a value
+func (p *partialResult4ApproxUniq) insertImpl(x approxUniqHashValue) {
+	if x == 0 {
+		if !p.hasZero {
+			p.size += 1
+		}
+		p.hasZero = true
+		return
+	}
+
+	placeValue := p.place(x)
+	for p.buf[placeValue] != 0 && p.buf[placeValue] != x {
+		placeValue++
+		placeValue &= p.mask()
+	}
+
+	if p.buf[placeValue] == x {
+		return
+	}
+
+	p.buf[placeValue] = x
+	p.size++
+}
+
+// If the hash table is full enough, then do resize.
+// If there are too many items, then throw half the pieces until they are small enough.
+func (p *partialResult4ApproxUniq) shrinkIfNeed() {
+	if p.size > p.maxFill() {
+		if p.size > uniquesHashMaxSize {
+			for p.size > uniquesHashMaxSize {
+				p.skipDegree++
+				p.rehash()
+			}
+		} else {
+			p.resize(0)
+		}
+	}
+}
+
+func (p *partialResult4ApproxUniq) maxFill() uint32 {
+	return uint32(1) << (p.sizeDegree - 1)
+}
+
+// Delete all values whose hashes do not divide by 2 ^ skip_degree
+func (p *partialResult4ApproxUniq) rehash() {
+	for i := uint32(0); i < p.bufSize(); i++ {
+		if p.buf[i] != 0 && !p.good(p.buf[i]) {
+			p.buf[i] = 0
+			p.size--
+		}
+	}
+
+	for i := uint32(0); i < p.bufSize(); i++ {
+		if p.buf[i] != 0 && i != p.place(p.buf[i]) {
+			x := p.buf[i]
+			p.buf[i] = 0
+			p.reinsertImpl(x)
+		}
+	}
+}
+
+// Insert a value into the new buffer that was in the old buffer.
+// Used when increasing the size of the buffer, as well as when reading from a file.
+func (p *partialResult4ApproxUniq) reinsertImpl(x approxUniqHashValue) {
+	placeValue := p.place(x)
+	for p.buf[placeValue] != 0 {
+		placeValue++
+		placeValue &= p.mask()
+	}
+
+	p.buf[placeValue] = x
+}
+
+func (p *partialResult4ApproxUniq) merge(tar *partialResult4ApproxUniq) {
+	if tar.skipDegree > p.skipDegree {
+		p.skipDegree = tar.skipDegree
+		p.rehash()
+	}
+
+	if !p.hasZero && tar.hasZero {
+		p.hasZero = true
+		p.size++
+		p.shrinkIfNeed()
+	}
+
+	for i := uint32(0); i < tar.bufSize(); i++ {
+		if tar.buf[i] != 0 && p.good(tar.buf[i]) {
+			p.insertImpl(tar.buf[i])
+			p.shrinkIfNeed()
+		}
+	}
+}
+
+func (e *baseApproxUniq) AppendFinalResult2Chunk(sctx sessionctx.Context, pr PartialResult, chk *chunk.Chunk) error {
+	p := (*partialResult4ApproxUniq)(pr)
+	chk.AppendInt64(e.ordinal, int64(p.fixedSize()))
+	return nil
+}
+
+func (e *baseApproxUniq) AllocPartialResult() PartialResult {
+	return (PartialResult)(newPartialResult4ApproxUniq())
+}
+
+func (e *baseApproxUniq) ResetPartialResult(pr PartialResult) {
+	p := (*partialResult4ApproxUniq)(pr)
+	p.reset()
+}
+
+func (e *baseApproxUniq) MergePartialResult(sctx sessionctx.Context, src PartialResult, dst PartialResult) error {
+	p1, p2 := (*partialResult4ApproxUniq)(src), (*partialResult4ApproxUniq)(dst)
+	p2.merge(p1)
+	return nil
+}
+
+type approxUniqOriginal struct {
+	baseApproxUniq
+}
+
+func (e *approxUniqOriginal) UpdatePartialResult(sctx sessionctx.Context, rowsInGroup []chunk.Row, pr PartialResult) (err error) {
+	p := (*partialResult4ApproxUniq)(pr)
+	encodedBytes := make([]byte, 0)
+	// Decimal struct is the biggest type we will use.
+	buf := make([]byte, types.MyDecimalStructSize)
+
+	for _, row := range rowsInGroup {
+		var hasNull, isNull bool
+		encodedBytes = encodedBytes[:0]
+
+		for i := 0; i < len(e.args) && !hasNull; i++ {
+			encodedBytes, isNull, err = evalAndEncode(sctx, e.args[i], row, buf, encodedBytes)
+			if err != nil {
+				return
+			}
+			if isNull {
+				hasNull = true
+				break
+			}
+		}
+		if hasNull {
+			continue
+		}
+
+		x := farm.Hash64(encodedBytes)
+		p.insert(x)
+	}
+
+	return nil
+}
+
+type approxUniqPartial struct {
+	baseApproxUniq
+}
+
+func (e *approxUniqPartial) UpdatePartialResult(sctx sessionctx.Context, rowsInGroup []chunk.Row, pr PartialResult) error {
+	p := (*partialResult4ApproxUniq)(pr)
+	for _, row := range rowsInGroup {
+		input, isNull, err := e.args[0].EvalString(sctx, row)
+		if err != nil {
+			return err
+		}
+
+		if isNull {
+			continue
+		}
+
+		err = p.readAndMerge([]byte(input))
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
