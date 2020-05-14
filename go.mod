@@ -1,6 +1,6 @@
 module github.com/pingcap/tidb
 
-replace github.com/pingcap/parser v0.0.0-20200507022230-f3bf29096657 => github.com/solotzg/parser v0.0.0-20200513084303-ee7cd9a50212
+replace github.com/pingcap/parser v0.0.0-20200427031542-879c7bd4f27d => github.com/solotzg/parser v0.0.0-20200513084303-ee7cd9a50212
 
 replace github.com/pingcap/tipb v0.0.0-20200417094153-7316d94df1ee => github.com/solotzg/tipb v0.0.0-20200513035501-2d4591b9cd9a
 
