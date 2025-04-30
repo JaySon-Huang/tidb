@@ -103,7 +103,7 @@ func (en *tableKVEncoder) parserData2TableData(parserData []types.Datum, rowID i
 		}
 	}
 
-	for i := 0; i < len(en.fieldMappings); i++ {
+	for i := range en.fieldMappings {
 		if i >= len(parserData) {
 			if en.fieldMappings[i].Column == nil {
 				setVar(en.fieldMappings[i].UserVar.Name, nil)
@@ -127,7 +127,7 @@ func (en *tableKVEncoder) parserData2TableData(parserData []types.Datum, rowID i
 
 		row = append(row, parserData[i])
 	}
-	for i := 0; i < len(en.columnAssignments); i++ {
+	for i := range en.columnAssignments {
 		// eval expression of `SET` clause
 		d, err := en.columnAssignments[i].Eval(en.SessionCtx.GetExprCtx().GetEvalCtx(), chunk.Row{})
 		if err != nil {

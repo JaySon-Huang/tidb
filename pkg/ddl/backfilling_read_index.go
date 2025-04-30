@@ -121,6 +121,7 @@ func (r *readIndexStepExecutor) RunSubtask(ctx context.Context, subtask *proto.S
 	r.curRowCount.Store(0)
 
 	concurrency := int(r.GetResource().CPU.Capacity())
+	/// For global sort
 	if r.isGlobalSort() {
 		pipe, err := r.buildExternalStorePipeline(opCtx, subtask.ID, sm, concurrency)
 		if err != nil {
@@ -132,6 +133,7 @@ func (r *readIndexStepExecutor) RunSubtask(ctx context.Context, subtask *proto.S
 		return r.onFinished(ctx, subtask)
 	}
 
+	/// For local sort
 	// TODO(tangenta): support checkpoint manager that interact with subtask table.
 	bCtx, err := ingest.NewBackendCtxBuilder(ctx, r.d.store, r.job).
 		WithImportDistributedLock(r.d.etcdCli, sm.TS).

@@ -244,9 +244,11 @@ func NewWriteIndexToExternalStoragePipeline(
 		memSizePerIndex = 1 * size.GB
 	})
 
+	// Scan table records for given [startKey, endKey) from kv store.
 	srcOp := NewTableScanTaskSource(ctx, store, tbl, startKey, endKey, nil)
 	scanOp := NewTableScanOperator(ctx, sessPool, copCtx, srcChkPool, readerCnt,
 		reorgMeta.GetBatchSize(), nil, nil)
+	// Write index records to external storage.
 	writeOp := NewWriteExternalStoreOperator(
 		ctx, copCtx, sessPool, jobID, subtaskID,
 		tbl, indexes, extStore, srcChkPool, writerCnt,
