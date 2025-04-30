@@ -409,6 +409,7 @@ func (local *Backend) doWrite(ctx context.Context, j *regionJob) error {
 		)
 	}
 
+	// Generate the import clients from the region peers.
 	leaderID := j.region.Leader.GetId()
 	clients := make([]sst.ImportSST_WriteClient, 0, len(region.GetPeers()))
 	allPeers := make([]*metapb.Peer, 0, len(region.GetPeers()))
@@ -497,6 +498,7 @@ func (local *Backend) doWrite(ctx context.Context, j *regionJob) error {
 		return nil
 	}
 
+	// Scan the key-value pairs from `j.ingestData` and flush them to the TiKV in `kvBatchSize`.
 	iter := j.ingestData.NewIter(ctx, j.keyRange.Start, j.keyRange.End, bufferPool)
 	//nolint: errcheck
 	defer iter.Close()
@@ -551,6 +553,7 @@ func (local *Backend) doWrite(ctx context.Context, j *regionJob) error {
 		return errors.Trace(iter.Error())
 	}
 
+	// flush the last batch
 	if count > 0 {
 		if err := flushKVs(); err != nil {
 			return errors.Trace(err)
@@ -640,7 +643,7 @@ func (local *Backend) ingest(ctx context.Context, j *regionJob) (err error) {
 		}()
 	}
 
-	for retry := 0; retry < maxRetryTimes; retry++ {
+	for range maxRetryTimes {
 		resp, err := local.doIngest(ctx, j)
 		if err == nil && resp.GetError() == nil {
 			j.convertStageTo(ingested)
