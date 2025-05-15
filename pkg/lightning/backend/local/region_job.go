@@ -373,6 +373,8 @@ func (local *Backend) doWrite(ctx context.Context, j *regionJob) error {
 		return nil
 	}
 
+	log.FromContext(ctx).Info("jayson========= region_job doWrite", logutil.Key("start", firstKey), logutil.Key("end", lastKey))
+
 	firstKey = codec.EncodeBytes([]byte{}, firstKey)
 	lastKey = codec.EncodeBytes([]byte{}, lastKey)
 

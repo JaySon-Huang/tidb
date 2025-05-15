@@ -2238,6 +2238,7 @@ func writeChunkToLocal(
 	count := 0
 	var lastHandle kv.Handle
 
+	// Acquire locks to avoid concurrent writes to the same local index file.
 	unlockFns := make([]func(), 0, len(writers))
 	for _, w := range writers {
 		unlock := w.LockForWrite()
@@ -2248,6 +2249,7 @@ func writeChunkToLocal(
 			unlock()
 		}
 	}()
+
 	needRestoreForIndexes := make([]bool, len(indexes))
 	restore, pkNeedRestore := false, false
 	if c.PrimaryKeyInfo != nil && c.TableInfo.IsCommonHandle && c.TableInfo.CommonHandleVersion != 0 {

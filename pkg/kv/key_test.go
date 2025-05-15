@@ -17,6 +17,7 @@ package kv_test
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"strconv"
 	"testing"
 	"time"
@@ -128,6 +129,12 @@ func TestHandle(t *testing.T) {
 	assert.False(t, ih.Equal(ih2))
 	assert.Equal(t, -1, ih.Compare(ih2))
 	assert.Equal(t, "100", ih.String())
+
+	ih3_as_key := Key(ih.Encoded())
+	ih3_as_key_next := ih3_as_key.Next()
+	ih3_as_key_next_prefix_next := ih3_as_key_next.PrefixNext()
+	ih3_as_key_prefix_next := ih3_as_key.PrefixNext()
+	fmt.Printf("ih3_as_key:%s, ih3_as_key_prefix_next:%s, next:%s, next_prefix_next:%s\n", ih3_as_key, ih3_as_key_prefix_next, ih3_as_key_next, ih3_as_key_next_prefix_next)
 
 	ch := testutil.MustNewCommonHandle(t, 100, "abc")
 	assert.False(t, ch.IsInt())

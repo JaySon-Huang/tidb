@@ -249,9 +249,11 @@ func generateReadIndexPlan(
 	if err != nil {
 		return nil, err
 	}
+	// For non-partition table, generate the plan for the table_id
 	if tblInfo.Partition == nil {
 		return generatePlanForPhysicalTable(ctx, d, tbl.(table.PhysicalTable), job, useCloud, instanceCnt, logger)
 	}
+	// For partition table, generate the plan for each partition
 	defs := tblInfo.Partition.Definitions
 	for _, def := range defs {
 		partTbl := tbl.GetPartitionedTable().GetPartition(def.ID)
