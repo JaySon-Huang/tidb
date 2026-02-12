@@ -1300,6 +1300,7 @@ func GenIndexKey(loc *time.Location, tblInfo *model.TableInfo, idxInfo *model.In
 			return nil, false, err
 		}
 	}
+	// Build the index key with format: t[tableID]_i[indexID][encodedKeyValues][handle(if not distinct)]
 	key = GetIndexKeyBuf(buf, RecordRowKeyLen+len(keyValues)*9+9)
 	key = appendTableIndexPrefix(key, phyTblID)
 	key = codec.EncodeInt(key, idxInfo.ID)
@@ -1715,7 +1716,12 @@ func GenIndexValueForClusteredIndexVersion1(loc *time.Location, tblInfo *model.T
 			if forceAllColumns || model.ColumnNeedRestoredData(idxCol, tblInfo.Columns) {
 				colIds = append(colIds, col.ID)
 				colIDSet[col.ID] = struct{}{}
-				if collate.IsBinCollation(model.GetIdxChangingFieldType(idxCol, col).GetCollate()) {
+				if forceAllColumns {
+					// For hybrid or fulltext indexes we rewrite the "encodedKeyValues" part of index key,
+					// so _bin columns cannot be reconstructed from key sortKey + padding count.
+					// Always store the original value in restore data to preserve the column value.
+					allRestoredData = append(allRestoredData, indexedValues[i])
+				} else if collate.IsBinCollation(model.GetIdxChangingFieldType(idxCol, col).GetCollate()) {
 					allRestoredData = append(allRestoredData, types.NewUintDatum(uint64(stringutil.GetTailSpaceCount(indexedValues[i].GetString()))))
 				} else {
 					allRestoredData = append(allRestoredData, indexedValues[i])
