@@ -3543,6 +3543,16 @@ var defaultSysVars = []*SysVar{
 			return setTiFlashComputeDispatchPolicy(vars, s)
 		},
 	},
+	{Scope: vardef.ScopeGlobal | vardef.ScopeSession, Name: vardef.TiFlashComputeSelectedAddress, Value: vardef.DefTiFlashComputeSelectedAddress, Type: vardef.TypeStr,
+		SetSession: func(vars *SessionVars, s string) error {
+			vars.TiFlashComputeSelectedAddress = s
+			return nil
+		},
+		SetGlobal: func(ctx context.Context, vars *SessionVars, s string) error {
+			vars.TiFlashComputeSelectedAddress = s
+			return nil
+		},
+	},
 	{Scope: vardef.ScopeGlobal | vardef.ScopeSession, Name: vardef.TiDBEnablePlanCacheForSubquery, Value: BoolToOnOff(vardef.DefTiDBEnablePlanCacheForSubquery), Type: vardef.TypeBool, SetSession: func(s *SessionVars, val string) error {
 		s.EnablePlanCacheForSubquery = TiDBOptOn(val)
 		return nil

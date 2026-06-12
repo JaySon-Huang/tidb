@@ -1791,6 +1791,10 @@ type SessionVars struct {
 	// Only for disaggregated-tiflash mode.
 	TiFlashComputeDispatchPolicy tiflashcompute.DispatchPolicy
 
+	// TiFlashComputeSelectedAddress indicates the selected tiflash_compute node address.
+	// Only for disaggregated-tiflash mode. Empty means use all tiflash_compute stores.
+	TiFlashComputeSelectedAddress string
+
 	// SlowTxnThreshold is the threshold of slow transaction logs
 	SlowTxnThreshold uint64
 
@@ -2498,6 +2502,7 @@ func NewSessionVars(hctx HookContext) *SessionVars {
 		mppVersion:                       kv.MppVersionUnspecified,
 		EnableLateMaterialization:        vardef.DefTiDBOptEnableLateMaterialization,
 		TiFlashComputeDispatchPolicy:     tiflashcompute.DispatchPolicyConsistentHash,
+		TiFlashComputeSelectedAddress:    "",
 		ResourceGroupName:                resourcegroup.DefaultResourceGroupName,
 		PagingSizeBytes:                  vardef.DefPagingSizeBytes,
 		DefaultCollationForUTF8MB4:       mysql.DefaultCollationName,

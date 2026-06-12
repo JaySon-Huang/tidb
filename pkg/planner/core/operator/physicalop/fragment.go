@@ -707,8 +707,10 @@ func (e *mppTaskGenerator) constructMPPTasksImpl(ctx context.Context, ts *Physic
 	// ttl is always 0, `tidb_mpp_store_fail_ttl` variable has been deprecated
 	ttl := time.Duration(0)
 	dispatchPolicy := tiflashcompute.DispatchPolicyInvalid
+	selectedAddress := ""
 	if config.GetGlobalConfig().DisaggregatedTiFlash {
 		dispatchPolicy = e.ctx.GetSessionVars().TiFlashComputeDispatchPolicy
+		selectedAddress = e.ctx.GetSessionVars().TiFlashComputeSelectedAddress
 	}
 	tiflashReplicaRead := e.ctx.GetSessionVars().TiFlashReplicaRead
 
@@ -717,7 +719,7 @@ func (e *mppTaskGenerator) constructMPPTasksImpl(ctx context.Context, ts *Physic
 		metas = e.tableReaderCache[val]
 		failpoint.InjectCall("mppTaskGeneratorTableReaderCacheHit")
 	} else {
-		metas, err = e.ctx.GetMPPClient().ConstructMPPTasks(ctx, req, ttl, dispatchPolicy, tiflashReplicaRead, e.ctx.GetSessionVars().StmtCtx.AppendWarning)
+		metas, err = e.ctx.GetMPPClient().ConstructMPPTasks(ctx, req, ttl, dispatchPolicy, selectedAddress, tiflashReplicaRead, e.ctx.GetSessionVars().StmtCtx.AppendWarning)
 		if err != nil {
 			return nil, errors.Trace(err)
 		}

@@ -1087,6 +1087,9 @@ const (
 
 	// TiFlashComputeDispatchPolicy indicates how to dispatch task to tiflash_compute nodes.
 	TiFlashComputeDispatchPolicy = "tiflash_compute_dispatch_policy"
+	// TiFlashComputeSelectedAddress indicates the selected tiflash_compute node address.
+	// Only for disaggregated-tiflash mode. Empty means use all tiflash_compute stores.
+	TiFlashComputeSelectedAddress = "tiflash_compute_selected_address"
 
 	// TiDBEnablePlanCacheForSubquery controls whether prepare statement with subquery can be cached
 	TiDBEnablePlanCacheForSubquery = "tidb_enable_plan_cache_for_subquery"
@@ -1839,6 +1842,7 @@ const (
 	DefTiDBEnablePlanCacheForParamLimit               = true
 	DefTiDBEnableINLJoinMultiPattern                  = true
 	DefTiFlashComputeDispatchPolicy                   = DispatchPolicyConsistentHashStr
+	DefTiFlashComputeSelectedAddress                  = ""
 	DefTiDBEnablePlanCacheForSubquery                 = true
 	DefTiDBLoadBasedReplicaReadThreshold              = time.Second
 	DefTiDBOptEnableLateMaterialization               = true

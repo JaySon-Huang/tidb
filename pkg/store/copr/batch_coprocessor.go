@@ -464,13 +464,14 @@ func buildBatchCopTasksForNonPartitionedTable(
 	balanceWithContinuity bool,
 	balanceContinuousRegionCount int64,
 	dispatchPolicy tiflashcompute.DispatchPolicy,
+	selectedAddress string,
 	tiflashReplicaReadPolicy tiflash.ReplicaRead,
 	appendWarning func(error)) ([]*batchCopTask, error) {
 	if config.GetGlobalConfig().DisaggregatedTiFlash {
 		if config.GetGlobalConfig().UseAutoScaler {
-			return buildBatchCopTasksConsistentHash(ctx, bo, store, []*KeyRanges{ranges}, storeType, ttl, dispatchPolicy)
+			return buildBatchCopTasksConsistentHash(ctx, bo, store, []*KeyRanges{ranges}, storeType, ttl, dispatchPolicy, selectedAddress)
 		}
-		return buildBatchCopTasksConsistentHashForPD(bo, store, []*KeyRanges{ranges}, storeType, ttl, dispatchPolicy)
+		return buildBatchCopTasksConsistentHashForPD(bo, store, []*KeyRanges{ranges}, storeType, ttl, dispatchPolicy, selectedAddress)
 	}
 	return buildBatchCopTasksCore(bo, store, []*KeyRanges{ranges}, storeType, isMPP, ttl, balanceWithContinuity, balanceContinuousRegionCount, tiflashReplicaReadPolicy, appendWarning)
 }
@@ -487,14 +488,15 @@ func buildBatchCopTasksForPartitionedTable(
 	balanceContinuousRegionCount int64,
 	partitionIDs []int64,
 	dispatchPolicy tiflashcompute.DispatchPolicy,
+	selectedAddress string,
 	tiflashReplicaReadPolicy tiflash.ReplicaRead,
 	appendWarning func(error)) (batchTasks []*batchCopTask, err error) {
 	if config.GetGlobalConfig().DisaggregatedTiFlash {
 		if config.GetGlobalConfig().UseAutoScaler {
-			batchTasks, err = buildBatchCopTasksConsistentHash(ctx, bo, store, rangesForEachPhysicalTable, storeType, ttl, dispatchPolicy)
+			batchTasks, err = buildBatchCopTasksConsistentHash(ctx, bo, store, rangesForEachPhysicalTable, storeType, ttl, dispatchPolicy, selectedAddress)
 		} else {
 			// todo: remove this after AutoScaler is stable.
-			batchTasks, err = buildBatchCopTasksConsistentHashForPD(bo, store, rangesForEachPhysicalTable, storeType, ttl, dispatchPolicy)
+			batchTasks, err = buildBatchCopTasksConsistentHashForPD(bo, store, rangesForEachPhysicalTable, storeType, ttl, dispatchPolicy, selectedAddress)
 		}
 	} else {
 		batchTasks, err = buildBatchCopTasksCore(bo, store, rangesForEachPhysicalTable, storeType, isMPP, ttl, balanceWithContinuity, balanceContinuousRegionCount, tiflashReplicaReadPolicy, appendWarning)
@@ -606,7 +608,8 @@ func buildBatchCopTasksConsistentHash(
 	rangesForEachPhysicalTable []*KeyRanges,
 	storeType kv.StoreType,
 	ttl time.Duration,
-	dispatchPolicy tiflashcompute.DispatchPolicy) (res []*batchCopTask, err error) {
+	dispatchPolicy tiflashcompute.DispatchPolicy,
+	selectedAddress string) (res []*batchCopTask, err error) {
 	failpointCheckWhichPolicy(dispatchPolicy)
 	start := time.Now()
 	const cmdType = tikvrpc.CmdBatchCop
@@ -650,6 +653,29 @@ func buildBatchCopTasksConsistentHash(
 		}
 		storesBefFilter := len(storesStr)
 		storesStr = filterAliveStoresStr(ctx, storesStr, ttl, kvStore)
+		if selectedAddress != "" {
+			found := false
+			for _, addr := range storesStr {
+				if addr == selectedAddress {
+					storesStr = []string{addr}
+					found = true
+					break
+				}
+			}
+			if !found {
+				logutil.BgLogger().Info("buildBatchCopTasksConsistentHash selected address not found",
+					zap.String("selectedAddress", selectedAddress))
+				if intest.InTest && retryNum > 3 {
+					return nil, errors.Errorf("selected tiflash_compute store %s is not available", selectedAddress)
+				}
+				err := fetchTopoBo.Backoff(tikv.BoTiFlashRPC(),
+					errors.Errorf("selected tiflash_compute store %s is not available", selectedAddress))
+				if err != nil {
+					return nil, errors.Trace(err)
+				}
+				continue
+			}
+		}
 		logutil.BgLogger().Info("topo filter alive", zap.Strings("topo", storesStr))
 		if len(storesStr) == 0 {
 			errMsg := "Cannot find proper topo to dispatch MPPTask: "
@@ -1258,11 +1284,11 @@ func (c *CopClient) sendBatch(ctx context.Context, req *kv.Request, vars *tikv.V
 			keyRanges = append(keyRanges, NewKeyRanges(pi.KeyRanges))
 			partitionIDs = append(partitionIDs, pi.ID)
 		}
-		tasks, err = buildBatchCopTasksForPartitionedTable(ctx, bo, c.store.kvStore, keyRanges, req.StoreType, false, 0, false, 0, partitionIDs, tiflashcompute.DispatchPolicyInvalid, option.TiFlashReplicaRead, option.AppendWarning)
+		tasks, err = buildBatchCopTasksForPartitionedTable(ctx, bo, c.store.kvStore, keyRanges, req.StoreType, false, 0, false, 0, partitionIDs, tiflashcompute.DispatchPolicyInvalid, "", option.TiFlashReplicaRead, option.AppendWarning)
 	} else {
 		// TODO: merge the if branch.
 		ranges := NewKeyRanges(req.KeyRanges.FirstPartitionRange())
-		tasks, err = buildBatchCopTasksForNonPartitionedTable(ctx, bo, c.store.kvStore, ranges, req.StoreType, false, 0, false, 0, tiflashcompute.DispatchPolicyInvalid, option.TiFlashReplicaRead, option.AppendWarning)
+		tasks, err = buildBatchCopTasksForNonPartitionedTable(ctx, bo, c.store.kvStore, ranges, req.StoreType, false, 0, false, 0, tiflashcompute.DispatchPolicyInvalid, "", option.TiFlashReplicaRead, option.AppendWarning)
 	}
 
 	if err != nil {
@@ -1423,7 +1449,7 @@ func (b *batchCopIterator) retryBatchCopTask(ctx context.Context, bo *backoff.Ba
 		slices.SortFunc(ranges, func(i, j kv.KeyRange) int {
 			return bytes.Compare(i.StartKey, j.StartKey)
 		})
-		ret, err := buildBatchCopTasksForNonPartitionedTable(ctx, bo, b.store, NewKeyRanges(ranges), b.req.StoreType, false, 0, false, 0, tiflashcompute.DispatchPolicyInvalid, b.tiflashReplicaReadPolicy, b.appendWarning)
+		ret, err := buildBatchCopTasksForNonPartitionedTable(ctx, bo, b.store, NewKeyRanges(ranges), b.req.StoreType, false, 0, false, 0, tiflashcompute.DispatchPolicyInvalid, "", b.tiflashReplicaReadPolicy, b.appendWarning)
 		return ret, err
 	}
 	// Retry Partition Table Scan
@@ -1446,7 +1472,7 @@ func (b *batchCopIterator) retryBatchCopTask(ctx context.Context, bo *backoff.Ba
 		})
 		keyRanges = append(keyRanges, NewKeyRanges(ranges))
 	}
-	ret, err := buildBatchCopTasksForPartitionedTable(ctx, bo, b.store, keyRanges, b.req.StoreType, false, 0, false, 0, pid, tiflashcompute.DispatchPolicyInvalid, b.tiflashReplicaReadPolicy, b.appendWarning)
+	ret, err := buildBatchCopTasksForPartitionedTable(ctx, bo, b.store, keyRanges, b.req.StoreType, false, 0, false, 0, pid, tiflashcompute.DispatchPolicyInvalid, "", b.tiflashReplicaReadPolicy, b.appendWarning)
 	return ret, err
 }
 
@@ -1603,7 +1629,8 @@ func buildBatchCopTasksConsistentHashForPD(bo *backoff.Backoffer,
 	rangesForEachPhysicalTable []*KeyRanges,
 	storeType kv.StoreType,
 	ttl time.Duration,
-	dispatchPolicy tiflashcompute.DispatchPolicy) (res []*batchCopTask, err error) {
+	dispatchPolicy tiflashcompute.DispatchPolicy,
+	selectedAddress string) (res []*batchCopTask, err error) {
 	failpointCheckWhichPolicy(dispatchPolicy)
 	const cmdType = tikvrpc.CmdBatchCop
 	var (
@@ -1662,6 +1689,31 @@ func buildBatchCopTasksConsistentHashForPD(bo *backoff.Backoffer,
 			continue
 		}
 		getStoreElapsed = time.Since(getStoreStart)
+
+		if selectedAddress != "" {
+			found := false
+			for _, s := range stores {
+				if s.GetAddr() == selectedAddress {
+					stores = []*tikv.Store{s}
+					found = true
+					break
+				}
+			}
+			if !found {
+				logutil.BgLogger().Info("buildBatchCopTasksConsistentHashForPD selected address not found",
+					zap.String("selectedAddress", selectedAddress))
+				cache.InvalidateTiFlashComputeStores()
+				if intest.InTest {
+					return nil, errors.Errorf("selected tiflash_compute store %s is not available", selectedAddress)
+				}
+				if err := bo.Backoff(tikv.BoTiFlashRPC(),
+					errors.Errorf("selected tiflash_compute store %s is not available", selectedAddress)); err != nil {
+					return nil, errors.Trace(err)
+				}
+				getStoreElapsed += time.Since(getStoreStart)
+				continue
+			}
+		}
 
 		storesStr := make([]string, 0, len(stores))
 		for _, s := range stores {
