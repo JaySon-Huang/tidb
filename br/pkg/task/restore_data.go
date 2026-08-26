@@ -162,7 +162,7 @@ func RunResolveKvData(c context.Context, g glue.Glue, cmdName string, cfg *Resto
 	//ModifyVolume(*ec2.ModifyVolumeInput) (*ec2.ModifyVolumeOutput, error) by backupmeta
 
 	// since we cannot reset tiflash automaticlly. so we should start it manually
-	if err = resetTiFlashReplicas(ctx, g, mgr.GetStorage(), mgr.GetPDClient()); err != nil {
+	if err = resetTiFlashReplicas(ctx, g, mgr.GetStorage(), mgr.GetPDClient(), cfg); err != nil {
 		return errors.Trace(err)
 	}
 
@@ -172,7 +172,18 @@ func RunResolveKvData(c context.Context, g glue.Glue, cmdName string, cfg *Resto
 	return nil
 }
 
-func resetTiFlashReplicas(ctx context.Context, g glue.Glue, storage kv.Storage, pdClient pd.Client) error {
+func resetTiFlashReplicas(ctx context.Context, g glue.Glue, storage kv.Storage, pdClient pd.Client, cfg *RestoreConfig) error {
+	if utils.CheckNextGenCompatibility(cfg.KeyspaceName, cfg.CheckRequirements) {
+		dom, err := g.GetDomain(storage)
+		columnarStorageEnabled := columnarStorageEnabledUnavailable
+		if err == nil {
+			columnarStorageEnabled = readColumnarStorageEnabledForLog(dom)
+		}
+		warnNextGenSkipTiFlashReplica(columnarStorageEnabled,
+			"Next-Gen restore does not restore TiFlash replicas; please reset them manually after restore")
+		return nil
+	}
+
 	dom, err := g.GetDomain(storage)
 	if err != nil {
 		return errors.Trace(err)

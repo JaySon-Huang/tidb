@@ -200,3 +200,12 @@ func TestGenResetSql(t *testing.T) {
 		"ALTER TABLE `test`.`fruits` SET TIFLASH REPLICA 1",
 	})
 }
+
+func TestTiFlashRecorderClear(t *testing.T) {
+	rec := tiflashrec.New()
+	rec.AddTable(1, model.TiFlashReplicaInfo{Count: 1})
+	rec.AddTable(2, model.TiFlashReplicaInfo{Count: 2})
+	require.Len(t, rec.GetItems(), 2)
+	rec.Clear()
+	require.Empty(t, rec.GetItems())
+}

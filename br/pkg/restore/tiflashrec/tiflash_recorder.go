@@ -57,6 +57,11 @@ func (r *TiFlashRecorder) Load(items map[int64]model.TiFlashReplicaInfo) {
 	r.items = items
 }
 
+// Clear removes all recorded TiFlash replica items.
+func (r *TiFlashRecorder) Clear() {
+	r.items = map[int64]model.TiFlashReplicaInfo{}
+}
+
 func (r *TiFlashRecorder) GetItems() map[int64]model.TiFlashReplicaInfo {
 	return r.items
 }

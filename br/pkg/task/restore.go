@@ -1742,7 +1742,8 @@ func runSnapshotRestore(c context.Context, mgr *conn.Mgr, g glue.Glue, cmdName s
 		}
 	}
 
-	err = PreCheckTableTiFlashReplica(ctx, mgr.GetPDClient(), tables, cfg.tiflashRecorder, isNextGenRestore)
+	err = PreCheckTableTiFlashReplica(ctx, mgr.GetPDClient(), tables, cfg.tiflashRecorder, isNextGenRestore,
+		readColumnarStorageEnabledForLog(mgr.GetDomain()))
 	if err != nil {
 		return errors.Trace(err)
 	}
@@ -2448,16 +2449,39 @@ func getTiFlashNodeCount(ctx context.Context, pdClient pd.Client) (uint64, error
 	return uint64(len(tiFlashStores)), nil
 }
 
+const columnarStorageEnabledUnavailable = "unavailable"
+
+// readColumnarStorageEnabledForLog reads tidb_columnar_storage_enabled for diagnostic logs.
+// Failures are reported as "unavailable"; callers must not use this value to decide
+// whether Next-Gen restore strips / skips TiFlash replica restore.
+func readColumnarStorageEnabledForLog(dom *domain.Domain) string {
+	if dom == nil {
+		return columnarStorageEnabledUnavailable
+	}
+	val, err := dom.GetGlobalVar(vardef.TiDBColumnarStorageEnabled)
+	if err != nil {
+		return columnarStorageEnabledUnavailable
+	}
+	return val
+}
+
+func warnNextGenSkipTiFlashReplica(columnarStorageEnabled, msg string) {
+	log.Warn(msg, zap.String("tidb_columnar_storage_enabled", columnarStorageEnabled))
+}
+
 // PreCheckTableTiFlashReplica checks whether TiFlash replica is less than TiFlash node.
+// columnarStorageEnabled is diagnostic-only for Next-Gen warn logs.
 func PreCheckTableTiFlashReplica(
 	ctx context.Context,
 	pdClient pd.Client,
 	tables []*metautil.Table,
 	recorder *tiflashrec.TiFlashRecorder,
 	isNextGenRestore bool,
+	columnarStorageEnabled string,
 ) error {
 	if isNextGenRestore {
-		log.Warn("Restoring to NextGen TiFlash is experimental. TiFlash replicas are disabled; please reset them manually after restore.")
+		warnNextGenSkipTiFlashReplica(columnarStorageEnabled,
+			"Next-Gen restore does not restore TiFlash replicas; please reset them manually after restore")
 		for _, tbl := range tables {
 			if tbl == nil || tbl.Info == nil {
 				// unreachable

@@ -1530,8 +1530,12 @@ func RunStreamRestore(
 			return errors.Trace(err)
 		}
 		if taskInfo.hasTiFlashItemsInCheckpoint() {
-			log.Info("load tiflash records of snapshot restore from checkpoint")
-			cfg.tiflashRecorder.Load(taskInfo.CheckpointInfo.Metadata.TiFlashItems)
+			if utils.CheckNextGenCompatibility(cfg.KeyspaceName, cfg.CheckRequirements) {
+				log.Info("skip loading tiflash records of snapshot restore from checkpoint for next-gen restore")
+			} else {
+				log.Info("load tiflash records of snapshot restore from checkpoint")
+				cfg.tiflashRecorder.Load(taskInfo.CheckpointInfo.Metadata.TiFlashItems)
+			}
 		}
 	}
 	logRestoreConfig := &LogRestoreConfig{
@@ -1991,11 +1995,18 @@ func restoreStream(
 	}
 
 	if cfg.tiflashRecorder != nil {
-		sqls := cfg.tiflashRecorder.GenerateAlterTableDDLs(mgr.GetDomain().InfoSchema())
-		log.Info("Generating SQLs for restoring TiFlash Replica",
-			zap.Strings("sqls", sqls))
-		if err := client.ResetTiflashReplicas(ctx, sqls, g); err != nil {
-			return errors.Annotate(err, "failed to reset tiflash replicas")
+		isNextGenRestore := utils.CheckNextGenCompatibility(cfg.KeyspaceName, cfg.CheckRequirements)
+		if isNextGenRestore {
+			cfg.tiflashRecorder.Clear()
+			warnNextGenSkipTiFlashReplica(readColumnarStorageEnabledForLog(mgr.GetDomain()),
+				"Next-Gen PiTR does not restore TiFlash replicas; please reset them manually after restore")
+		} else {
+			sqls := cfg.tiflashRecorder.GenerateAlterTableDDLs(mgr.GetDomain().InfoSchema())
+			log.Info("Generating SQLs for restoring TiFlash Replica",
+				zap.Strings("sqls", sqls))
+			if err := client.ResetTiflashReplicas(ctx, sqls, g); err != nil {
+				return errors.Annotate(err, "failed to reset tiflash replicas")
+			}
 		}
 	}
 
@@ -2448,20 +2459,38 @@ func isCurrentIdMapSaved(checkpointTaskInfo *checkpoint.TaskInfoForLogRestore) b
 }
 
 func buildSchemaReplace(client *logclient.LogClient, cfg *LogRestoreConfig) (*stream.SchemasReplace, error) {
+	isNextGenRestore := utils.CheckNextGenCompatibility(cfg.KeyspaceName, cfg.CheckRequirements)
 	schemasReplace := stream.NewSchemasReplace(cfg.tableMappingManager.DBReplaceMap, cfg.tableMappingManager.IsFromPiTRIDMap(), cfg.tiflashRecorder,
 		client.CurrentTS(), client.RecordDeleteRange, cfg.ExplicitFilter)
 	schemasReplace.AfterTableRewrittenFn = func(deleted bool, tableInfo *model.TableInfo) {
-		// When the table replica changed to 0, the tiflash replica might be set to `nil`.
-		// We should remove the table if we meet.
-		if deleted || tableInfo.TiFlashReplica == nil {
-			cfg.tiflashRecorder.DelTable(tableInfo.ID)
-			return
-		}
-		cfg.tiflashRecorder.AddTable(tableInfo.ID, *tableInfo.TiFlashReplica)
-		// Remove the replica first and restore them at the end.
-		tableInfo.TiFlashReplica = nil
+		UpdateTiFlashRecorderAfterTableRewritten(cfg.tiflashRecorder, tableInfo, deleted, isNextGenRestore)
 	}
 	return schemasReplace, nil
+}
+
+// UpdateTiFlashRecorderAfterTableRewritten updates the TiFlash recorder after a table meta is rewritten
+// during PiTR log restore. On Next-Gen, replicas are cleared and never recorded for later reset.
+func UpdateTiFlashRecorderAfterTableRewritten(
+	recorder *tiflashrec.TiFlashRecorder,
+	tableInfo *model.TableInfo,
+	deleted bool,
+	isNextGenRestore bool,
+) {
+	// When the table replica changed to 0, the tiflash replica might be set to `nil`.
+	// We should remove the table if we meet.
+	if deleted || tableInfo.TiFlashReplica == nil {
+		recorder.DelTable(tableInfo.ID)
+		return
+	}
+	// Next-Gen never auto-restores TiFlash replicas: clear metadata and do not record for later reset.
+	if isNextGenRestore {
+		recorder.DelTable(tableInfo.ID)
+		tableInfo.TiFlashReplica = nil
+		return
+	}
+	recorder.AddTable(tableInfo.ID, *tableInfo.TiFlashReplica)
+	// Remove the replica first and restore them at the end.
+	tableInfo.TiFlashReplica = nil
 }
 
 func buildAndSaveIDMapIfNeeded(ctx context.Context, client *logclient.LogClient, cfg *LogRestoreConfig) error {
